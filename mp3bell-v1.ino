@@ -33,9 +33,10 @@
 #include <SFEMP3Shield.h> // VS1053B MP3 chip
 #include <SdFatUtil.h>    // FAT utilities, including FreeRam()
 #include <PinChangeInt.h> // PCintPort
+#include <XBee.h>         // XBee
 
 /* List of defines */
-#define DEBUG_ENABLED 0
+#define DEBUG_ENABLED 2 //0 // Set to 1 for standard serial mode, 2 for xbee mode
 
 #define NUM_OF_INPUT_TRIGS 5
 #define NUM_OF_INPUT_TRIGS_UART_EN 3
@@ -106,7 +107,9 @@ typedef enum colors
 typedef enum syserrors
 {
   ERR_SD_INIT,
-  ERR_MP3_INIT
+  ERR_MP3_INIT,
+  ERR_XBEE_INV_RESPONSE,
+  ERR_XBEE_NO_RESPONSE
 };
 
 typedef enum btnstate
@@ -126,6 +129,7 @@ typedef enum volchange
 /* Objects */
 SdFat sd;  // Must be sd as it is referred by SFEMP3Shield.cpp
 SFEMP3Shield gMp3Chip;
+XBee gXbee = XBee(); // XBee (XBEE TH REG S2C)
 
 /* Globals */
 char gBellSoundList[NUM_OF_SOUNDS_MAX][NUM_OF_CHAR_FILENAME] = {};  // Bell's sound list, up to 15 songs
@@ -167,6 +171,12 @@ void setup()
 
   /* Initialize serial port */
   Serial.begin(9600);
+
+  /* Initialize XBee */
+  if (2 == DEBUG_ENABLED)
+  {
+    gXbee.setSerial(Serial);
+  }
 
   /* Print header */
   String hdr_msg = "FreeRam: " + String(FreeRam(), DEC);
@@ -239,8 +249,8 @@ void loop()
   static byte b = 0;  
   
   xbee_log_info(F("Starting loop"));
-  delay(50);
-  update_rgb_led(r,g,b);  // Turn off LEDs
+  delay(1000);
+  update_rgb_led(r,g,b);  // Update
 
   r+=1;
   g+=2;
@@ -263,7 +273,7 @@ void init_sdcard(void)
   if (1 != result)
   {
     xbee_log_error(F("Cannot init SD!"));
-    error_blink(ERR_SD_INIT, RED);
+    error_blink(ERR_SD_INIT, RED, false);
   }
   else
   {
@@ -287,7 +297,7 @@ void init_mp3chip(void)
   if ( (0 != result) && (6 != result))
   {
     xbee_log_error(F("Cannot init MP3 chip!"));
-    error_blink(ERR_MP3_INIT, RED);
+    error_blink(ERR_MP3_INIT, RED, false);
   }
   else
   {
@@ -468,9 +478,11 @@ void clean_filename (void)
 void update_rgb_led(byte r, byte g, byte b)
 {
   /* Update color */
-  analogWrite(IO_ROT_LED_R, (255-r)); // pin 10's PWM is 490 Hz
+  //analogWrite(IO_ROT_LED_R, (r)); // pin 10's PWM is 490 Hz
+  digitalWrite(IO_ROT_LED_R, (0==r)?LOW:HIGH);  // use as digital pin, so... only on or off.
   digitalWrite(IO_ROT_LED_G, (0==g)?LOW:HIGH);  // Unfortunately this pin is not PWM, so... only on or off.
-  analogWrite(IO_ROT_LED_B, (255-b)); // pin 5's PWM is 980 Hz
+  digitalWrite(IO_ROT_LED_B, (0==b)?LOW:HIGH);  // use as digital pin, so... only on or off.
+  //analogWrite(IO_ROT_LED_B, (b)); // pin 5's PWM is 980 Hz
 }
 
 void change_volume(volchange volopt)
@@ -503,7 +515,7 @@ void change_volume(volchange volopt)
   }
 }
 
-void error_blink(syserrors errorCode, colors color)
+void error_blink(syserrors errorCode, colors color, bool singleTrigger)
 {
   int error_blinks = (int)errorCode;
   byte r = 0;
@@ -526,7 +538,7 @@ void error_blink(syserrors errorCode, colors color)
       break;
   }
 
-  /* Forever loop heree in case of fatal error */
+  /* Forever loop here in case of fatal error */
   while(true)
   {
     for (int i = 0; i< error_blinks; i++)
@@ -537,6 +549,9 @@ void error_blink(syserrors errorCode, colors color)
       delay(200);
     }
     delay(1000);
+
+    /* If it is single trigger, break out of loop */
+    if(true == singleTrigger) break;
   }
 }
 
@@ -546,30 +561,107 @@ void error_blink(syserrors errorCode, colors color)
 /*************************************/
 void xbee_log_error(String msg)
 {
-  if (0 == DEBUG_ENABLED) return;
-  Serial.println("[ERR]" + msg);
+  if (0 == DEBUG_ENABLED)
+  {
+    return;
+  }
+  else if (1 == DEBUG_ENABLED)
+  {
+    Serial.println("[ERR]" + msg);
+  }
+  else if (2 == DEBUG_ENABLED)
+  {
+    xbee_str_tx("[ERR]" + msg);
+  }
 }
 
 void xbee_log_warn(String msg)
 {
-  if (0 == DEBUG_ENABLED) return;
-  Serial.println("[WRN]" + msg);
+  if (0 == DEBUG_ENABLED)
+  {
+    return;
+  }
+  else if (1 == DEBUG_ENABLED)
+  {
+    Serial.println("[WRN]" + msg);
+  }
+  else if (2 == DEBUG_ENABLED)
+  {
+    xbee_str_tx("[WRN]" + msg);
+  }
 }
 
 void xbee_log_info(String msg)
 {
-  if (0 == DEBUG_ENABLED) return;
-  Serial.println("[INF]" + msg);
+  if (0 == DEBUG_ENABLED)
+  {
+    return;
+  }
+  else if (1 == DEBUG_ENABLED)
+  {
+    Serial.println("[INF]" + msg);
+  }
+  else if (2 == DEBUG_ENABLED)
+  {
+    xbee_str_tx("[INF]" + msg);
+  }
 }
 
 void xbee_log_dbg(String msg)
 {
-  if (0 == DEBUG_ENABLED) return;
-  Serial.println("[DBG]" + msg);
+  if (0 == DEBUG_ENABLED)
+  {
+    return;
+  }
+  else if (1 == DEBUG_ENABLED)
+  {
+    Serial.println("[DBG]" + msg);
+  }
+  else if (2 == DEBUG_ENABLED)
+  {
+    xbee_str_tx("[DBG]" + msg);
+  }
 }
 
-void xbee_write_string(String msg)
+void xbee_str_tx(String msg)
 {
+  /* Create address (to coordinator) */
+  XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
+  ZBTxRequest zb_tx = ZBTxRequest(addr64, 0xfffc, 0x0, 0x0, msg.c_str(), msg.length()+1, 0x1); // To all routers, expecting response
+  ZBTxStatusResponse tx_status = ZBTxStatusResponse();
+
+  /* Begin transmit */
+  gXbee.send(zb_tx);
+
+  /* Wait for status response, 500ms */
+  if (gXbee.readPacket(500))
+  {
+    /* Should be TX Status */
+    if (gXbee.getResponse().getApiId() == ZB_TX_STATUS_RESPONSE)
+    {
+      gXbee.getResponse().getZBTxStatusResponse(tx_status);
+
+      /* Get delivery status, 5th byte */
+      if (tx_status.getDeliveryStatus() == SUCCESS)
+      {
+        /* GOOD! */
+      }
+      else
+      {
+        /* No one received */
+      }
+    }
+  }
+  else if (gXbee.getResponse().isError())
+  {
+    /* Received improper response */
+    error_blink(ERR_XBEE_INV_RESPONSE, RED, true);
+  }
+  else
+  {
+    /* No response at all ... */
+    error_blink(ERR_XBEE_NO_RESPONSE, RED, true);
+  }
   
 }
 
