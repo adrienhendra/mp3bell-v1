@@ -4,27 +4,27 @@
 /* Date: June 2017                   */
 /*************************************/
 /**
- * Sparkfun's page:
- * https://www.sparkfun.com/products/11013
- *
- *
- * Hardware spec for Lilypad MP3:
- * - ATmega 328p microprocessor with Arduino bootloader (Pro 3.3V/8MHz)
- * - VS1053B MP3 (and many other formats) decoder chip
- * - TPA2016D2 stereo amplifier
- * - MCP73831 3.7V Lipo charger (preset to 500mA, rate can be changed if desired)
- * - Headphone jack
- * - Five trigger inputs, also usable as analog, serial and I2C (“Wire”) connections
- * - Load new firmware (or write your own) using the free Arduino IDE
- * - 5V FTDI basic breakout for battery recharging and reprogramming
- * - Header for optional RGB rotary encoder (not included, requires soldering)
+   Sparkfun's page:
+   https://www.sparkfun.com/products/11013
+
+
+   Hardware spec for Lilypad MP3:
+   - ATmega 328p microprocessor with Arduino bootloader (Pro 3.3V/8MHz)
+   - VS1053B MP3 (and many other formats) decoder chip
+   - TPA2016D2 stereo amplifier
+   - MCP73831 3.7V Lipo charger (preset to 500mA, rate can be changed if desired)
+   - Headphone jack
+   - Five trigger inputs, also usable as analog, serial and I2C (“Wire”) connections
+   - Load new firmware (or write your own) using the free Arduino IDE
+   - 5V FTDI basic breakout for battery recharging and reprogramming
+   - Header for optional RGB rotary encoder (not included, requires soldering)
 */
 /**
- * Required Libraries:
- * - SdFat library by William Greiman
- * - SFEMP3Shield library by Porter and Flaga
- * - PinChangeInt library by Lex Talionis
- */
+   Required Libraries:
+   - SdFat library by William Greiman
+   - SFEMP3Shield library by Porter and Flaga
+   - PinChangeInt library by Lex Talionis
+*/
 /*************************************/
 
 /* Include libraries */
@@ -35,13 +35,44 @@
 #include <PinChangeInt.h> // PCintPort
 #include <XBee.h>         // XBee
 
-/* List of defines */
-#define DEBUG_ENABLED 2 //0 // Set to 1 for standard serial mode, 2 for xbee mode
+#include <stdio.h>        // Std IO
 
+/* Function Macros */
+#define DEBUG_ENABLED 1 //0 // Set to 1 for standard serial mode, 2 for xbee mode
+
+#if (DEBUG_ENABLED==0)
+
+#define LOG_FMT(f,...) do {} while(0)
+#define LOG_ERR(msg) do {} while(0)
+#define LOG_DBG(msg) do {} while(0)
+
+#elif (DEBUG_ENABLED==1)
+
+#define LOG_FMT(f,...) do { \
+    char msg[100] = {}; \
+    Serial.print("[DBG] "); \
+    sprintf(msg, f, __VA_ARGS__); \
+    Serial.println(msg); \
+  } while(0)
+
+#define LOG_ERR(msg) do { Serial.print("[ERR] "); Serial.println(msg); } while(0)
+#define LOG_DBG(msg) do { Serial.print("[DBG] "); Serial.println(msg); } while(0)
+
+#define LOG_SHOW_FREERAM() do { LOG_FMT("Free RAM: %d", FreeRam()); } while (0)
+
+#else
+
+#define LOG_FMT(f,...) {}
+#define LOG_ERR(msg) {}
+#define LOG_DBG(msg) {}
+
+#endif
+
+/* List of defines */
 #define NUM_OF_INPUT_TRIGS 5
 #define NUM_OF_INPUT_TRIGS_UART_EN 3
-#define NUM_OF_SOUNDS_MAX 15
-#define NUM_OF_NOTIF_MAX 15
+#define NUM_OF_SOUNDS_MAX 10
+#define NUM_OF_NOTIF_MAX 10
 #define NUM_OF_CHAR_FILENAME 13 // FAT format [8.3] plus null char at the end
 
 /*************************************/
@@ -54,13 +85,15 @@ const int IO_TRIG2_SDA = A4;  // This pin is shared with I2C SDA, connected to D
 const int IO_TRIG3_SCL = A5;  // This pin is shared with I2C SCL, connected to SLEEP_RQ (pin9) on XBEE
 const int IO_TRIG4_RXI = 1;   // This pin is shared with UART TX, connected to DOUT (pin2) on XBEE
 const int IO_TRIG5_TXO = 0;   // This pin is shared with UART RX, connected to DIN (via 100 ohm resistor, pin3) on XBEE
-int gTRIGS[NUM_OF_INPUT_TRIGS] = {
-  IO_TRIG1,       // Actual bell trigger
-  IO_TRIG2_SDA,   // XBEE DIO12, pin 4
-  IO_TRIG3_SCL,   // XBEE SLEEP_RQ, pin 9
-  IO_TRIG4_RXI,   // XBEE DOUT, pin 2
-  IO_TRIG5_TXO    // XBEE DIN, pin 3
-  };
+
+/** Note */
+/*
+   IO_TRIG1: Actual bell trigger
+   IO_TRIG2_SDA: XBEE DIO12, pin 4
+   IO_TRIG3_SCL: XBEE SLEEP_RQ, pin 9
+   IO_TRIG4_RXI: XBEE DOUT, pin 2
+   IO_TRIG5_TXO: XBEE DIN, pin 3
+*/
 
 /* Rotary encoder with RGB. This is optional hardware, but installed on BELL hardware */
 const int IO_ROT_LED_R = 10;
@@ -88,13 +121,15 @@ const int IO_SPI_MISO = 12;
 const int IO_SPI_SCK = 13;
 
 /* Default volume */
-const uint16_t DEFAULT_VOLUME = 40; // 0: Loudest, 255: lowest
+const uint16_t DEFAULT_VOLUME = 80; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MIN_VOLUME = 255; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MAX_VOLUME = 0; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_STEP_VOLUME = 1; // 0: Loudest, 255: lowest
 const uint32_t BUTTON_DEBOUNCE_MS = 10; // 10 millisecond debounce period
 
-const uint32_t EXEC_TIMEOUT_MS = 1000; // 1000 millisecond execution timeout period
+const uint32_t EXEC_TIMEOUT_MS = 10000; // 10000 millisecond execution timeout period
+
+const uint16_t MAX_NUM_FILES = 1000; // 0 - 999 files supported at this moment.
 
 /* Enums */
 typedef enum colors
@@ -127,16 +162,13 @@ typedef enum volchange
 /*************************************/
 
 /* Objects */
-SdFat sd;  // Must be sd as it is referred by SFEMP3Shield.cpp
+SdFat sd;  // Must be 'sd', referred by SFEMP3Shield.cpp
+SdFile file;  // Must be 'file', referred by SFEMP3Shield.cpp
+
 SFEMP3Shield gMp3Chip;
 XBee gXbee = XBee(); // XBee (XBEE TH REG S2C)
 
 /* Globals */
-char gBellSoundList[NUM_OF_SOUNDS_MAX][NUM_OF_CHAR_FILENAME] = {};  // Bell's sound list, up to 15 songs
-int gBellSoundCount = 0;
-char gBellNotifList[NUM_OF_SOUNDS_MAX][NUM_OF_CHAR_FILENAME] = {};  // Notification sound list, up to 15 songs
-int gBellNotifCount = 0;
-
 bool gRotEncEnable = false;
 bool gXbeeEnable = false;
 
@@ -150,21 +182,21 @@ volatile bool gRotaryDirection = false; // CW: true, CCW: false
 
 volatile uint16_t gSoundVolume = 0;
 
+char gCurrTrackName[13] = {};
+uint16_t gMaxNumberOfFiles = 1;
+
 /*************************************/
 
 /* Arduino Setup */
 void setup()
 {
-  /* Clean up filenames */
-  clean_filename();
-
   /* Configure trigger input pins with weak-pullups */
-  pinMode(gTRIGS[0], INPUT_PULLUP); // Bell trigger
-  pinMode(gTRIGS[1], INPUT_PULLUP); // XBEE DIO12 (set as input on both side)
-  pinMode(gTRIGS[2], OUTPUT); // XBEE SLEEP_RQ (set as input on XBEE side, active high)
+  pinMode(IO_TRIG1, INPUT_PULLUP); // Bell trigger
+  pinMode(IO_TRIG2_SDA, INPUT_PULLUP); // XBEE DIO12 (set as input on both side)
+  pinMode(IO_TRIG3_SCL, OUTPUT); // XBEE SLEEP_RQ (set as input on XBEE side, active high)
 
   /* Set XBEE to power on */
-  digitalWrite(gTRIGS[2], LOW);
+  digitalWrite(IO_TRIG3_SCL, LOW);
 
   pinMode(IO_TRIG4_RXI, INPUT);
   pinMode(IO_TRIG5_TXO, OUTPUT);
@@ -179,20 +211,17 @@ void setup()
   }
 
   /* Print header */
-  String hdr_msg = "FreeRam: " + String(FreeRam(), DEC);
-
-  /* Print a header */    
-  xbee_log_dbg(hdr_msg);
+  LOG_FMT("Free RAM: %d", FreeRam());
 
   /* RGB Rotary Encoder */
   pinMode(IO_ROT_A, INPUT_PULLUP);
   pinMode(IO_ROT_B, INPUT_PULLUP);
   pinMode(IO_ROT_SW, INPUT_PULLUP);
-  
+
   pinMode(IO_ROT_LED_R, OUTPUT);
   pinMode(IO_ROT_LED_G, OUTPUT);
   pinMode(IO_ROT_LED_B, OUTPUT);
-  update_rgb_led(0,0,0);  // Turn off LEDs
+  update_rgb_led(0, 0, 0); // Turn off LEDs
 
   /* MP3 Controls */
   pinMode(IO_EN_GPIO1, OUTPUT);
@@ -223,15 +252,19 @@ void setup()
   /* Initialize ISRs */
   init_isr();
 
+  /* List files */
+  //sd.ls(LS_R | LS_DATE | LS_SIZE);
+
   /* Initialize file playback */
-  sd.chdir("/", true);  // Change to root dir
+  sd.chdir("/", true); // Change to root dir
 
-  /* Load file */
-
+  /* Scan number of playable files */
+  gMaxNumberOfFiles = scan_max_num_tracks();
+  LOG_FMT(">> Max # of files: %d", gMaxNumberOfFiles);
 
   /* Set volume */
-  gSoundVolume = DEFAULT_VOLUME;  // TODO: Reload?
-  gMp3Chip.setVolume(gSoundVolume); // Left and Right channel same level  
+  gSoundVolume = DEFAULT_VOLUME; // TODO: Reload?
+  gMp3Chip.setVolume(gSoundVolume); // Left and Right channel same level
 
   /* Enable amplifier after MP3 system initialized */
   digitalWrite(IO_EN_GPIO1, HIGH);
@@ -244,17 +277,72 @@ void setup()
 /* Arduino Loop */
 void loop()
 {
-  static byte r = 0;
-  static byte g = 0;
-  static byte b = 0;  
-  
-  xbee_log_info(F("Starting loop"));
-  delay(1000);
-  update_rgb_led(r,g,b);  // Update
+  static bool s_button_down = false;
+  static unsigned long int s_button_down_start = 0;
+  static unsigned long int s_button_down_stop = 0;
 
-  r+=1;
-  g+=2;
-  b+=3;
+  static bool s_bell_active = false;
+
+  /* Check if rotary state changed */
+  if (true == gRotaryChanged)
+  {
+    /* Change volume */
+    if (true == gRotaryDirection)
+    {
+      /* Clockwise, increase volume */
+      change_volume(VOL_UP);
+    }
+    else
+    {
+      /* Counter Clockwise, decrease volume */
+      change_volume(VOL_DOWN);
+    }
+
+    /* Clear flag */
+    gRotaryChanged = false;
+  }
+
+  /* Check for rotary button press */
+  if (true == gButtonPressed)
+  {
+    LOG_DBG(F("Button Pressed!"));
+
+    /* TODO: Do something ? */
+
+    /* Clear flag */
+    gButtonPressed = false;
+  }
+
+  /* Check for rotary button release */
+  if (true == gButtonReleased)
+  {
+    LOG_DBG(F("Button Released!"));
+
+    /* Set button active high (when released) */
+    s_bell_active = true;
+
+    /* Clear flag */
+    gButtonReleased = false;
+  }
+
+  /* Stop here and do not proceed if bell is still playing */
+  if (false == gMp3Chip.isPlaying())
+  {
+    /* Check if need to play next bell songs */
+    if (true == s_bell_active)
+    {
+      /* Play Next Song */
+      play_next_song();
+  
+      /* Clear bell active */
+      s_bell_active = false;
+    }
+  }
+  else
+  {
+    /* Automatically clear bell request */
+    s_bell_active = false;
+  }
 }
 
 
@@ -264,7 +352,7 @@ void loop()
 void init_sdcard(void)
 {
   byte result = 0;
-  xbee_log_info(F("Initialize SD Card ..."));
+  LOG_DBG(F("Initialize SD Card ..."));
 
   /* Begin */
   result = sd.begin(IO_SD_CS, SPI_HALF_SPEED);
@@ -272,14 +360,14 @@ void init_sdcard(void)
   /* Check for SD Card error */
   if (1 != result)
   {
-    xbee_log_error(F("Cannot init SD!"));
+    LOG_DBG(F("Cannot init SD!"));
     error_blink(ERR_SD_INIT, RED, false);
   }
   else
   {
-    xbee_log_info(F("SD init OK"));
+    LOG_DBG(F("SD init OK"));
   }
-    
+
 }
 
 /*************************************/
@@ -288,7 +376,7 @@ void init_sdcard(void)
 void init_mp3chip(void)
 {
   byte result = 0;
-  xbee_log_info(F("Initialize MP3 chip ..."));
+  LOG_DBG(F("Initialize MP3 chip ..."));
 
   /* Begin */
   result = gMp3Chip.begin();
@@ -296,14 +384,14 @@ void init_mp3chip(void)
   /* Check, 0 and 6 are OK */
   if ( (0 != result) && (6 != result))
   {
-    xbee_log_error(F("Cannot init MP3 chip!"));
+    LOG_DBG(F("Cannot init MP3 chip!"));
     error_blink(ERR_MP3_INIT, RED, false);
   }
   else
   {
-    xbee_log_info(F("MP3 init OK"));
+    LOG_DBG(F("MP3 init OK"));
   }
-  
+
 }
 
 /*************************************/
@@ -313,15 +401,18 @@ void init_isr(void)
 {
   /* Rotary Interrupt, only pin 3 is available for interrupt on 328p on lilypad mp3 */
   attachInterrupt(digitalPinToInterrupt(IO_ROT_A), rotary_isr, CHANGE);
-  
+
   /* Button Interrupt */
   PCintPort::attachInterrupt(IO_ROT_SW, rotary_btn_isr, CHANGE);
+
+  /* Bell Interrupt */
+  PCintPort::attachInterrupt(IO_TRIG1, rotary_btn_isr, CHANGE);
 }
 
 
 void rotary_isr(void)
 {
-  static uint8_t rotary_state = 0x0;  // 2 LSB store current state from IO_ROT_A and IO_ROT_B
+  static uint8_t rotary_state = 0x0; // 2 LSB store current state from IO_ROT_A and IO_ROT_B
 
   /* Remember prev state */
   rotary_state = rotary_state << 2;
@@ -331,21 +422,23 @@ void rotary_isr(void)
   rotary_state &= 0x0F;
 
   /* Check rotary state */
-  if ((0x09 == rotary_state) || (0x06 == rotary_state))
+  //if ((0x09 == rotary_state) || (0x06 == rotary_state))
+  if (0x09 == rotary_state)
   {
     /* Last and current state are: 1001 or 0110, this is CW motion */
     gRotaryCounter++;
     gRotaryDirection = true;
     gRotaryChanged = true;
   }
-  else if ((0x03 == rotary_state) || (0x0C == rotary_state))
+  //else if ((0x03 == rotary_state) || (0x0C == rotary_state))
+  else if (0x03 == rotary_state)
   {
     /* Last and current state are: 0011 or 1100, this is CCW motion */
     gRotaryCounter--;
     gRotaryDirection = false;
     gRotaryChanged = true;
   }
-  
+
 }
 
 void rotary_btn_isr(void)
@@ -364,7 +457,7 @@ void rotary_btn_isr(void)
     button_start_time_ms = millis();
 
     /* Debouncer */
-    if(button_start_time_ms > (button_end_time_ms + BUTTON_DEBOUNCE_MS))
+    if (button_start_time_ms > (button_end_time_ms + BUTTON_DEBOUNCE_MS))
     {
       button_state = BTN_UP;
       gButtonPressed = true;
@@ -376,7 +469,7 @@ void rotary_btn_isr(void)
     button_end_time_ms = millis();
 
     /* Debouncer */
-    if( button_end_time_ms > (button_start_time_ms + BUTTON_DEBOUNCE_MS))
+    if ( button_end_time_ms > (button_start_time_ms + BUTTON_DEBOUNCE_MS))
     {
       button_state = BTN_DOWN;
       gButtonReleased = true;
@@ -385,135 +478,145 @@ void rotary_btn_isr(void)
       gButtonDowntime = button_end_time_ms - button_start_time_ms;
     }
   }
-  
-}
 
-/*************************************/
-/* File Utilities */
-/*************************************/
-void get_next_track(void)
-{
-  /* Get next playable file (must be music file) */
-  uint32_t start_time = millis();
-  uint32_t end_time = start_time;
-  while(end_time < (start_time + EXEC_TIMEOUT_MS))
-  {
-    if (true == get_next_file())
-    {
-      /* File is found, break */
-      break;
-    }
-
-    /* Update end time */
-    end_time = millis();    
-  }
-}
-
-void get_prev_track(void)
-{
-  /* Get previous playable file (must be music file) */
-  uint32_t start_time = millis();
-  uint32_t end_time = start_time;
-  while(end_time < (start_time + EXEC_TIMEOUT_MS))
-  {
-    if (true == get_prev_file())
-    {
-      /* File is found, break */
-      break;
-    }
-
-    /* Update end time */
-    end_time = millis();    
-  }
-}
-
-bool get_next_file(void)
-{
-  bool is_found = false;
-
-  /* Look for next file */
-  
-
-  /* Is it playable? */
-
-  return is_found;
-}
-
-
-bool get_prev_file(void)
-{
-  bool is_found = false;
-
-  /* Look for prev file */
-
-
-  /* Is it playable? */
-
-  return is_found;
 }
 
 /*************************************/
 /* Utilities */
 /*************************************/
-void clean_filename (void)
-{  
-  /* Clear sound list */
-  for (int i = 0; i< NUM_OF_SOUNDS_MAX; i++)
-  {
-    memset(gBellSoundList[i], 0, NUM_OF_CHAR_FILENAME);
-  }
-
-  /* Clear notif list */
-  for (int i = 0; i< NUM_OF_NOTIF_MAX; i++)
-  {
-    memset(gBellNotifList[i], 0, NUM_OF_CHAR_FILENAME);
-  }
-  /* Clear sound count */
-  gBellSoundCount = 0;
-
-  /* Clear notification count */
-  gBellNotifCount = 0;
-}
 
 void update_rgb_led(byte r, byte g, byte b)
 {
   /* Update color */
   //analogWrite(IO_ROT_LED_R, (r)); // pin 10's PWM is 490 Hz
-  digitalWrite(IO_ROT_LED_R, (0==r)?LOW:HIGH);  // use as digital pin, so... only on or off.
-  digitalWrite(IO_ROT_LED_G, (0==g)?LOW:HIGH);  // Unfortunately this pin is not PWM, so... only on or off.
-  digitalWrite(IO_ROT_LED_B, (0==b)?LOW:HIGH);  // use as digital pin, so... only on or off.
+  digitalWrite(IO_ROT_LED_R, (0 == r) ? LOW : HIGH); // use as digital pin, so... only on or off.
+  digitalWrite(IO_ROT_LED_G, (0 == g) ? LOW : HIGH); // Unfortunately this pin is not PWM, so... only on or off.
+  digitalWrite(IO_ROT_LED_B, (0 == b) ? LOW : HIGH); // use as digital pin, so... only on or off.
   //analogWrite(IO_ROT_LED_B, (b)); // pin 5's PWM is 980 Hz
 }
 
 void change_volume(volchange volopt)
 {
-  switch(volopt)
+  switch (volopt)
   {
     case VOL_UP:
       /* Volume up and check max limits */
-      if (gSoundVolume >= DEFAULT_MAX_VOLUME)
+      if (gSoundVolume > DEFAULT_MAX_VOLUME)
       {
         /* Loudest is 0 */
         gSoundVolume -= DEFAULT_STEP_VOLUME;
-        if (gSoundVolume < DEFAULT_MAX_VOLUME) gSoundVolume = DEFAULT_MAX_VOLUME; // Volume cap
+        if (gSoundVolume <= DEFAULT_MAX_VOLUME) gSoundVolume = DEFAULT_MAX_VOLUME; // Volume cap
       }
       break;
-      
+
     case VOL_DOWN:
       /* Volume down and check min limits */
-      if (gSoundVolume <= DEFAULT_MIN_VOLUME)
+      if (gSoundVolume < DEFAULT_MIN_VOLUME)
       {
         /* Lowest is 255 */
         gSoundVolume += DEFAULT_STEP_VOLUME;
-        if (gSoundVolume > DEFAULT_MIN_VOLUME) gSoundVolume = DEFAULT_MIN_VOLUME; // Volume cap
+        if (gSoundVolume >= DEFAULT_MIN_VOLUME) gSoundVolume = DEFAULT_MIN_VOLUME; // Volume cap
       }
       break;
-      
+
     default:
       /* Not supported volume option */
       break;
   }
+
+  /* Update volume */
+  gMp3Chip.setVolume(gSoundVolume, gSoundVolume);
+
+  /* Debug information */
+  LOG_FMT(">> Vol: %d", gSoundVolume);
 }
+
+uint16_t scan_max_num_tracks(void)
+{
+  uint16_t track_counts = 0;
+
+  /* Move to root folder */
+  sd.chdir("/", true); // Change to root dir
+
+  /* Go through each file and check for its mp3 extension */
+  bool result = true;
+  
+  while (true == result)
+  {
+    result = file.openNext(sd.vwd(), O_READ);
+
+    //LOG_FMT(">> Res: %d", result);
+    
+    if (true == result)
+    {
+      /* Is this file playable? */
+      file.getFilename(gCurrTrackName);
+      //LOG_FMT(">> Scanning: %s", gCurrTrackName);
+
+      /* Check against simple rules */
+      char *temp_ext;
+    
+      /* Seek to last . character */
+      temp_ext = strrchr(gCurrTrackName, '.');
+      temp_ext += 1; // Seek next character
+
+      if ( (0 != temp_ext[0]) && ('_' != temp_ext[0]) && (0 == strcasecmp(temp_ext, "MP3")) )
+      {
+        /* Supported file */
+        track_counts++;
+      }
+    }
+    else
+    {
+      /* This is all, no more file in this directory, ensure it is still under root folder */
+      sd.chdir("/",true);
+    }
+
+    file.close();
+  }
+
+  /* Limit check: no file detected, however, SD card always have track000.mp3 file as default */
+  if (track_counts <= 0) track_counts = 1;
+
+  /* Limit check: Too many files detected, only play the first 999 files */
+  if (track_counts >= MAX_NUM_FILES) track_counts = MAX_NUM_FILES-1;
+
+  return track_counts;
+}
+
+uint32_t play_next_song(void)
+{
+  uint32_t result = 0;
+
+  /* Show free ram */
+  LOG_SHOW_FREERAM();
+
+  /* Play next track */
+  static uint32_t sPlayIdx = 0;
+
+  /* Generate track name, files must follow this rule! */
+  char temp_trackname[13] = "TRACK000.MP3"; // Default name in 8.3 format (includes null)
+
+  /* Play until at least a file is detected */
+  do
+  {
+    sprintf(temp_trackname, "TRACK%03d.MP3", sPlayIdx);
+    
+    result = gMp3Chip.playMP3(temp_trackname);
+  
+    LOG_FMT(">> Playing: %s, status: %d ...", temp_trackname, result);
+  
+    /* Next track */
+    sPlayIdx++;
+    if (sPlayIdx > gMaxNumberOfFiles) sPlayIdx = 0;
+  } while (0 != result);
+
+  return result;
+}
+
+/*************************************/
+/* System utilities */
+/*************************************/
 
 void error_blink(syserrors errorCode, colors color, bool singleTrigger)
 {
@@ -522,7 +625,7 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
   byte g = 0;
   byte b = 0;
 
-  switch(color)
+  switch (color)
   {
     case GREEN:
       g = 255;
@@ -531,7 +634,7 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
     case BLUE:
       b = 255;
       break;
-      
+
     case RED:
     default:
       r = 255;
@@ -539,19 +642,19 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
   }
 
   /* Forever loop here in case of fatal error */
-  while(true)
+  while (true)
   {
-    for (int i = 0; i< error_blinks; i++)
+    for (int i = 0; i < error_blinks; i++)
     {
-      update_rgb_led(0,0,0);
+      update_rgb_led(0, 0, 0);
       delay(100);
-      update_rgb_led(r,g,b);
+      update_rgb_led(r, g, b);
       delay(200);
     }
     delay(1000);
 
     /* If it is single trigger, break out of loop */
-    if(true == singleTrigger) break;
+    if (true == singleTrigger) break;
   }
 }
 
@@ -559,75 +662,11 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
 /*************************************/
 /* XBEE / Debug Utilities */
 /*************************************/
-void xbee_log_error(String msg)
-{
-  if (0 == DEBUG_ENABLED)
-  {
-    return;
-  }
-  else if (1 == DEBUG_ENABLED)
-  {
-    Serial.println("[ERR]" + msg);
-  }
-  else if (2 == DEBUG_ENABLED)
-  {
-    xbee_str_tx("[ERR]" + msg);
-  }
-}
-
-void xbee_log_warn(String msg)
-{
-  if (0 == DEBUG_ENABLED)
-  {
-    return;
-  }
-  else if (1 == DEBUG_ENABLED)
-  {
-    Serial.println("[WRN]" + msg);
-  }
-  else if (2 == DEBUG_ENABLED)
-  {
-    xbee_str_tx("[WRN]" + msg);
-  }
-}
-
-void xbee_log_info(String msg)
-{
-  if (0 == DEBUG_ENABLED)
-  {
-    return;
-  }
-  else if (1 == DEBUG_ENABLED)
-  {
-    Serial.println("[INF]" + msg);
-  }
-  else if (2 == DEBUG_ENABLED)
-  {
-    xbee_str_tx("[INF]" + msg);
-  }
-}
-
-void xbee_log_dbg(String msg)
-{
-  if (0 == DEBUG_ENABLED)
-  {
-    return;
-  }
-  else if (1 == DEBUG_ENABLED)
-  {
-    Serial.println("[DBG]" + msg);
-  }
-  else if (2 == DEBUG_ENABLED)
-  {
-    xbee_str_tx("[DBG]" + msg);
-  }
-}
-
 void xbee_str_tx(String msg)
 {
   /* Create address (to coordinator) */
   XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
-  ZBTxRequest zb_tx = ZBTxRequest(addr64, 0xfffc, 0x0, 0x0, msg.c_str(), msg.length()+1, 0x1); // To all routers, expecting response
+  ZBTxRequest zb_tx = ZBTxRequest(addr64, 0xfffc, 0x0, 0x0, msg.c_str(), msg.length() + 1, 0x1); // To all routers, expecting response
   ZBTxStatusResponse tx_status = ZBTxStatusResponse();
 
   /* Begin transmit */
@@ -662,6 +701,5 @@ void xbee_str_tx(String msg)
     /* No response at all ... */
     error_blink(ERR_XBEE_NO_RESPONSE, RED, true);
   }
-  
-}
 
+}
