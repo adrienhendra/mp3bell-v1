@@ -75,8 +75,8 @@
 #define IO_TRIG1 A0
 #define IO_TRIG2_SDA A4  // This pin is shared with I2C SDA, connected to DIO12 (pin4) on XBEE
 #define IO_TRIG3_SCL A5  // This pin is shared with I2C SCL, connected to SLEEP_RQ (pin9) on XBEE
-#define IO_TRIG4_RXI 1   // This pin is shared with UART TX, connected to DOUT (pin2) on XBEE
-#define IO_TRIG5_TXO 0   // This pin is shared with UART RX, connected to DIN (via 100 ohm resistor, pin3) on XBEE
+#define IO_TRIG4_TXO 1   // This pin is shared with UART TX, connected to DIN (via 100 ohm resistor, pin3) on XBEE
+#define IO_TRIG5_RXI 0   // This pin is shared with UART RX, connected to DOUT (pin2) on XBEE
 
 /** Note */
 /*
@@ -211,8 +211,8 @@ void setup()
   /* Set XBEE to power on */
   digitalWrite(IO_TRIG3_SCL, LOW);
 
-  pinMode(IO_TRIG4_RXI, INPUT);
-  pinMode(IO_TRIG5_TXO, OUTPUT);
+  pinMode(IO_TRIG4_TXO, OUTPUT);
+  pinMode(IO_TRIG5_RXI, INPUT);
 
   /* Initialize serial port */
   Serial.begin(9600);
@@ -296,6 +296,7 @@ void loop()
   static unsigned long int s_button_down_stop = 0;
 
   static bool s_bell_active = false;
+  bool bell_confirmation = false; // true: confirm only, false: ring real bell on remote
 
   /* Check if rotary state changed */
   if (true == gRotaryChanged)
@@ -351,13 +352,14 @@ void loop()
 
   /* Handle XBEE request */
   if ((true == new_rx_ready) 
-      && ((XBEE_MY_PROTOCOL_ID == rx_to_node) || (254 == rx_to_node)))
+      && ((XBEE_MY_PROTOCOL_ID == rx_to_node) || (255 == rx_to_node)))
   {
     switch(rx_cmd)
     {
       case 0:
         /* Ring command */
         s_bell_active = true;
+        bell_confirmation = true;
         break;
 
       case 1:
@@ -424,7 +426,14 @@ void loop()
 
 #if(XBEE_ENABLED==1)
       /* Send broadcast command through XBEE if enabled */
-      xbee_cmd_bc_tx(1, 0);
+      if (true == bell_confirmation)
+      {
+        xbee_cmd_bc_tx(255, 1, 0);
+      }
+      else
+      {
+        xbee_cmd_bc_tx(255, 0, 0);
+      }
 #endif
 
       /* Clear bell active */
@@ -828,12 +837,12 @@ void good_blink(sysokstat okCode, colors color)
 /*************************************/
 
 /* Command Broadcast TX Request */
-void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
+void xbee_cmd_bc_tx(byte toNode, byte commandId, byte subCommandId)
 {
 #if(XBEE_ENABLED==1)
   /* Command Payload */
   uint8_t temp_payload[8] = {};
-  temp_payload[0] = XBEE_MY_PROTOCOL_ID;
+  temp_payload[0] = toNode;
   temp_payload[1] = commandId;
   temp_payload[2] = subCommandId;
   temp_payload[3] = 0;
@@ -848,7 +857,7 @@ void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
     0x0,              // Options
     temp_payload,      // Data payload
     sizeof(temp_payload), // Data payload length
-    0x0               // FrameId (0: no response required, 1: response required)
+    0x1               // FrameId (0: no response required, 1: response required)
     ); // To all routers, expecting response
     
   ZBTxStatusResponse tx_status = ZBTxStatusResponse();
