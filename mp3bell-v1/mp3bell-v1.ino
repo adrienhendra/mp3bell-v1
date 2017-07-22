@@ -38,7 +38,7 @@
 #include <stdio.h>        // Std IO
 
 /* Function Macros */
-#define DEBUG_ENABLED 255 //0 // Set to 255 for debug serial mode
+#define DEBUG_ENABLED 0 // Set to 255 for debug serial mode
 
 #if (DEBUG_ENABLED==255)
 
@@ -114,9 +114,9 @@
 #define IO_SPI_SCK 13
 
 /* Default volume */
-const uint16_t DEFAULT_VOLUME = 80; // 0: Loudest, 255: lowest
-const uint16_t DEFAULT_MIN_VOLUME = 255; // 0: Loudest, 255: lowest
-const uint16_t DEFAULT_MAX_VOLUME = 0; // 0: Loudest, 255: lowest
+const uint8_t DEFAULT_VOLUME = 0; // 0: Loudest, 255: lowest
+const uint8_t DEFAULT_MIN_VOLUME = 255; // 0: Loudest, 255: lowest
+const uint8_t DEFAULT_MAX_VOLUME = 0; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_STEP_VOLUME = 1; // 0: Loudest, 255: lowest
 const uint32_t BUTTON_DEBOUNCE_MS = 10; // 10 millisecond debounce period
 
@@ -165,7 +165,8 @@ typedef enum volchange
 {
   VOL_UP,
   VOL_DOWN,
-  VOL_DEF
+  VOL_DEF,
+  VOL_MAN
 };
 
 /*************************************/
@@ -189,7 +190,7 @@ volatile uint32_t gRotaryCounter = 0;
 volatile bool gRotaryChanged = false;
 volatile bool gRotaryDirection = false; // CW: true, CCW: false
 
-volatile uint16_t gSoundVolume = 0;
+volatile uint8_t gSoundVolume = 0;
 
 char gCurrTrackName[13] = {};
 uint16_t gMaxNumberOfFiles = 1;
@@ -274,7 +275,7 @@ void setup()
 
   /* Set volume */
   gSoundVolume = DEFAULT_VOLUME; // TODO: Reload?
-  gMp3Chip.setVolume(gSoundVolume); // Left and Right channel same level
+  gMp3Chip.setVolume(gSoundVolume, gSoundVolume); // Left and Right channel same level
 
   /* Clear LED */
   update_bit_rgb_led(0x7);
@@ -365,15 +366,25 @@ void loop()
         
       case 2:
         /* Vol change */
-        if (0 == rx_subcmd0)
+        if (VOL_UP == rx_subcmd0)
         {
           /* Vol Up */
           change_volume(VOL_UP);
         }
-        else if (1 == rx_subcmd0)
+        else if (VOL_DOWN == rx_subcmd0)
         {
           /* Vol Down */
           change_volume(VOL_DOWN);
+        }
+        else if(VOL_DEF == rx_subcmd0)
+        {
+          /* Vol Default */
+          change_volume(VOL_DEF);
+        }
+        else if(VOL_MAN == rx_subcmd0)
+        {
+          /* Vol Manual */
+          set_volume((uint8_t)rx_subcmd1);
         }
         else
         {
@@ -600,6 +611,15 @@ void update_bit_rgb_led(byte bitWiseRGB)
   digitalWrite(IO_ROT_LED_B, temp_bitwise & 0x4); // use as digital pin, only on or off.
 }
 
+void set_volume(uint8_t volumeLevel)
+{
+  /* Manually set volume level */
+  gSoundVolume = volumeLevel;
+  
+  /* Update volume */
+  gMp3Chip.setVolume(gSoundVolume, gSoundVolume);
+}
+
 void change_volume(volchange volopt)
 {
   switch (volopt)
@@ -624,6 +644,7 @@ void change_volume(volchange volopt)
       }
       break;
 
+    case VOL_DEF:
     default:
       /* Not supported volume option, switch to default */
       gSoundVolume = DEFAULT_VOLUME;
@@ -811,7 +832,7 @@ void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
 {
 #if(XBEE_ENABLED==1)
   /* Command Payload */
-  uint8_t temp_payload[4] = { 0, 0, 0, 0};
+  uint8_t temp_payload[8] = {};
   temp_payload[0] = XBEE_MY_PROTOCOL_ID;
   temp_payload[1] = commandId;
   temp_payload[2] = subCommandId;
@@ -827,7 +848,7 @@ void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
     0x0,              // Options
     temp_payload,      // Data payload
     sizeof(temp_payload), // Data payload length
-    0x1               // FrameId (0: no response required, 1: response required)
+    0x0               // FrameId (0: no response required, 1: response required)
     ); // To all routers, expecting response
     
   ZBTxStatusResponse tx_status = ZBTxStatusResponse();
