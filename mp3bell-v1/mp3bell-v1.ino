@@ -114,7 +114,7 @@
 #define IO_SPI_SCK 13
 
 /* Default volume */
-const uint16_t DEFAULT_VOLUME = 0; // 0: Loudest, 255: lowest
+const uint16_t DEFAULT_VOLUME = 80; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MIN_VOLUME = 255; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MAX_VOLUME = 0; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_STEP_VOLUME = 1; // 0: Loudest, 255: lowest
@@ -123,6 +123,8 @@ const uint32_t BUTTON_DEBOUNCE_MS = 10; // 10 millisecond debounce period
 const uint32_t EXEC_TIMEOUT_MS = 10000; // 10000 millisecond execution timeout period
 
 const uint16_t MAX_NUM_FILES = 1000; // 0 - 999 files supported at this moment.
+
+const byte XBEE_MY_PROTOCOL_ID = 0; // Bell is ID 0
 
 /* Enums */
 typedef enum colors
@@ -138,12 +140,19 @@ typedef enum syserrors
   ERR_MP3_INIT,
   ERR_XBEE_INV_RESPONSE,
   ERR_XBEE_NO_RESPONSE,
-  ERR_XBEE_NO_LISTENER
+  ERR_XBEE_NO_LISTENER,
+  ERR_XBEE_RX_NOT_ACKD,
+  ERR_XBEE_DISASSOCIATED,
+  ERR_XBEE_UNKNMSR,
+  ERR_XBEE_UNKNRESP,
+  ERR_XBEE_RX_NORESP
 };
 
 typedef enum sysokstat
 {
-  GOOD_XBEE_TX_SUCCESS
+  GOOD_XBEE_TX_SUCCESS,
+  GOOD_XBEE_RX_SUCCESS,
+  GOOD_XBEE_ASSOCIATED
 };
 
 typedef enum btnstate
@@ -155,7 +164,8 @@ typedef enum btnstate
 typedef enum volchange
 {
   VOL_UP,
-  VOL_DOWN
+  VOL_DOWN,
+  VOL_DEF
 };
 
 /*************************************/
@@ -206,7 +216,7 @@ void setup()
   /* Initialize serial port */
   Serial.begin(9600);
 
-#if (XBEE_ENABLED==1)
+#if(XBEE_ENABLED==1)
   /* Initialize XBee */
   gXbee.setSerial(Serial);
 #endif
@@ -327,6 +337,58 @@ void loop()
     /* Clear flag */
     gButtonReleased = false;
   }
+  
+#if(XBEE_ENABLED==1)
+  byte rx_to_node = 254;  // 254 reserved for blank XBEE Command, 255: broadcast
+  byte rx_cmd = 254;      // 254 reserved for blank XBEE Command
+  byte rx_subcmd0 = 254;   // 254 reserved for blank XBEE Command
+  byte rx_subcmd1 = 254;   // 254 reserved for blank XBEE Command
+  
+  /* Check XBEE Request */
+  bool new_rx_ready = xbee_cmd_rx(rx_to_node, rx_cmd, rx_subcmd0, rx_subcmd1);
+  //LOG_FMT(">> XBEE RX C: %d, S: %d", rx_cmd, rx_subcmd);
+
+  /* Handle XBEE request */
+  if ((true == new_rx_ready) 
+      && ((XBEE_MY_PROTOCOL_ID == rx_to_node) || (254 == rx_to_node)))
+  {
+    switch(rx_cmd)
+    {
+      case 0:
+        /* Ring command */
+        s_bell_active = true;
+        break;
+
+      case 1:
+        /* Ring Remote */
+        break;
+        
+      case 2:
+        /* Vol change */
+        if (0 == rx_subcmd0)
+        {
+          /* Vol Up */
+          change_volume(VOL_UP);
+        }
+        else if (1 == rx_subcmd0)
+        {
+          /* Vol Down */
+          change_volume(VOL_DOWN);
+        }
+        else
+        {
+          /* Vol Default */
+          change_volume(VOL_DEF);
+        }
+        break;
+        
+      default:
+        /* Ignore this command */
+        break;
+    }
+  }
+  
+#endif
 
   /* Stop here and do not proceed if bell is still playing */
   if (false == gMp3Chip.isPlaying())
@@ -351,7 +413,7 @@ void loop()
 
 #if(XBEE_ENABLED==1)
       /* Send broadcast command through XBEE if enabled */
-      xbee_cmd_bc_tx(0, 0);
+      xbee_cmd_bc_tx(1, 0);
 #endif
 
       /* Clear bell active */
@@ -563,7 +625,8 @@ void change_volume(volchange volopt)
       break;
 
     default:
-      /* Not supported volume option */
+      /* Not supported volume option, switch to default */
+      gSoundVolume = DEFAULT_VOLUME;
       break;
   }
 
@@ -701,6 +764,8 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
     /* If it is single trigger, break out of loop */
     if (true == singleTrigger) break;
   }
+
+  update_bit_rgb_led(0x7);  // All off
 }
 
 void good_blink(sysokstat okCode, colors color)
@@ -733,88 +798,35 @@ void good_blink(sysokstat okCode, colors color)
     delay(200);
   }
   delay(1000);
+
+  update_bit_rgb_led(0x7);  // All off
 }
 
 /*************************************/
 /* XBEE / Debug Utilities */
 /*************************************/
-void xbee_str_bc_tx(String msg)
-{
-#if (XBEE_ENABLED==1)
-
-  /* Create address (to coordinator) */
-  XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
-  
-  ZBTxRequest zb_tx = ZBTxRequest(
-    addr64,           // Address 64: (default: 0xffff or broadcast)
-    0xfffc,           // Address 16: (default: to all router node)
-    0x0,              // Broadcast radius
-    0x0,              // Options
-    msg.c_str(),      // Data payload
-    msg.length() + 1, // Data payload lenght
-    0x1               // FrameId (0: no response required, 1: response required)
-    ); // To all routers, expecting response
-    
-  ZBTxStatusResponse tx_status = ZBTxStatusResponse();
-
-  /* Begin transmit */
-  gXbee.send(zb_tx);
-
-  /* Wait for status response, 500ms */
-  if (gXbee.readPacket(500))
-  {
-    /* Should be TX Status */
-    if (gXbee.getResponse().getApiId() == ZB_TX_STATUS_RESPONSE)
-    {
-      gXbee.getResponse().getZBTxStatusResponse(tx_status);
-
-      /* Get delivery status, 5th byte */
-      if (tx_status.getDeliveryStatus() == SUCCESS)
-      {
-        /* GOOD! */
-        good_blink(GOOD_XBEE_TX_SUCCESS, GREEN);
-      }
-      else
-      {
-        /* No one received */
-        error_blink(ERR_XBEE_NO_LISTENER, RED, true);
-      }
-    }
-  }
-  else if (gXbee.getResponse().isError())
-  {
-    /* Received improper response */
-    error_blink(ERR_XBEE_INV_RESPONSE, RED, true);
-  }
-  else
-  {
-    /* No response at all ... */
-    error_blink(ERR_XBEE_NO_RESPONSE, RED, true);
-  }
-
-#endif
-
-}
 
 /* Command Broadcast TX Request */
 void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
 {
-#if (XBEE_ENABLED==1)
+#if(XBEE_ENABLED==1)
   /* Command Payload */
-  uint8_t temp_payload[2] = {};
-  temp_payload[0] = commandId;
-  temp_payload[1] = subCommandId;
+  uint8_t temp_payload[4] = { 0, 0, 0, 0};
+  temp_payload[0] = XBEE_MY_PROTOCOL_ID;
+  temp_payload[1] = commandId;
+  temp_payload[2] = subCommandId;
+  temp_payload[3] = 0;
 
   /* Create address (to coordinator) */
   XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
   
   ZBTxRequest zb_tx = ZBTxRequest(
     addr64,           // Address 64: (default: 0xffff or broadcast)
-    0xfffc,           // Address 16: (default: to all router node)
+    0xfffe,           // Address 16: (default: to all router node)
     0x0,              // Broadcast radius
     0x0,              // Options
     temp_payload,      // Data payload
-    sizeof(temp_payload), // Data payload lenght
+    sizeof(temp_payload), // Data payload length
     0x1               // FrameId (0: no response required, 1: response required)
     ); // To all routers, expecting response
     
@@ -827,12 +839,12 @@ void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
   if (gXbee.readPacket(500))
   {
     /* Should be TX Status */
-    if (gXbee.getResponse().getApiId() == ZB_TX_STATUS_RESPONSE)
+    if (ZB_TX_STATUS_RESPONSE == gXbee.getResponse().getApiId())
     {
       gXbee.getResponse().getZBTxStatusResponse(tx_status);
 
       /* Get delivery status, 5th byte */
-      if (tx_status.getDeliveryStatus() == SUCCESS)
+      if (SUCCESS == tx_status.getDeliveryStatus())
       {
         /* GOOD! */
         good_blink(GOOD_XBEE_TX_SUCCESS, GREEN);
@@ -862,3 +874,92 @@ void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
 #endif
 
 }
+
+/* Command RX */
+bool xbee_cmd_rx(byte& toNode, byte& commandId, byte& subCommand0Id, byte& subCommand1Id)
+{
+  bool new_rx_avail = false;
+  
+#if(XBEE_ENABLED==1)
+  ZBRxResponse rx = ZBRxResponse();
+  ModemStatusResponse msr = ModemStatusResponse();
+
+  /* Check XBEE packet */
+  gXbee.readPacket();
+
+  /* Check if any response */
+  if (gXbee.getResponse().isAvailable())
+  {
+    if (ZB_RX_RESPONSE == gXbee.getResponse().getApiId())
+    {
+      /* API RX */
+      gXbee.getResponse().getZBRxResponse(rx);
+
+      if (ZB_PACKET_ACKNOWLEDGED == rx.getOption())
+      {
+        /* Sender Ack'd */
+        good_blink(GOOD_XBEE_RX_SUCCESS, GREEN);
+      }
+      else
+      {
+        /* Sender didn't get Ack'd */
+        error_blink(ERR_XBEE_RX_NOT_ACKD, RED, true);
+      }
+
+      /* Extract payload (b0: to, b1: cmd, b2: sub cmd) */
+      byte pl_0 = rx.getData(0);
+      byte pl_1 = rx.getData(1);
+      byte pl_2 = rx.getData(2);
+      byte pl_3 = rx.getData(3);
+
+      /* Update value */
+      toNode = pl_0;
+      commandId = pl_1;
+      subCommand0Id = pl_2;
+      subCommand1Id = pl_3;
+
+      /* RX Updated */
+      new_rx_avail = true;
+    }
+    else if (MODEM_STATUS_RESPONSE == gXbee.getResponse().getApiId())
+    {
+      /* Modem status response */
+      gXbee.getResponse().getModemStatusResponse(msr);
+      if (ASSOCIATED == msr.getStatus())
+      {
+        /* Do something */
+        good_blink(GOOD_XBEE_ASSOCIATED, GREEN);
+        LOG_DBG(F(">> XBEE MSR: ASSOCIATED"));
+      }
+      else if (DISASSOCIATED == msr.getStatus())
+      {
+        /* Do something ? */
+        error_blink(ERR_XBEE_DISASSOCIATED, RED, true);
+        LOG_DBG(F(">> XBEE MSR: DISASSOCIATED"));
+      }
+      else
+      {
+        /* Do something ? */
+        error_blink(ERR_XBEE_UNKNMSR, RED, true);
+        LOG_DBG(F(">> XBEE MSR: ???"));
+      }
+    }
+    else
+    {
+      /* Other response, ignore */
+      error_blink(ERR_XBEE_UNKNRESP, RED, true);
+      LOG_DBG(F(">> XBEE ?? RESP"));
+    }
+    
+  }
+  else if (gXbee.getResponse().isError())
+  {
+    error_blink(ERR_XBEE_RX_NORESP, RED, true);
+    LOG_FMT("Error reading packet. %d", gXbee.getResponse().getErrorCode());
+  }
+
+#endif
+
+  return new_rx_avail;
+}
+
