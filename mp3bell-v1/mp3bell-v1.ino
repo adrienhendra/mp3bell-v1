@@ -38,15 +38,9 @@
 #include <stdio.h>        // Std IO
 
 /* Function Macros */
-#define DEBUG_ENABLED 1 //0 // Set to 1 for standard serial mode, 2 for xbee mode
+#define DEBUG_ENABLED 255 //0 // Set to 255 for debug serial mode
 
-#if (DEBUG_ENABLED==0)
-
-#define LOG_FMT(f,...) do {} while(0)
-#define LOG_ERR(msg) do {} while(0)
-#define LOG_DBG(msg) do {} while(0)
-
-#elif (DEBUG_ENABLED==1)
+#if (DEBUG_ENABLED==255)
 
 #define LOG_FMT(f,...) do { \
     char msg[100] = {}; \
@@ -57,34 +51,32 @@
 
 #define LOG_ERR(msg) do { Serial.print("[ERR] "); Serial.println(msg); } while(0)
 #define LOG_DBG(msg) do { Serial.print("[DBG] "); Serial.println(msg); } while(0)
-
 #define LOG_SHOW_FREERAM() do { LOG_FMT("Free RAM: %d", FreeRam()); } while (0)
 
 #else
 
-#define LOG_FMT(f,...) {}
-#define LOG_ERR(msg) {}
-#define LOG_DBG(msg) {}
+/* No debug or other values */
+#define LOG_FMT(f,...) do {} while(0)
+#define LOG_ERR(msg) do {} while(0)
+#define LOG_DBG(msg) do {} while(0)
+#define LOG_SHOW_FREERAM() do {} while(0)
 
 #endif
 
 /* List of defines */
-#define NUM_OF_INPUT_TRIGS 5
-#define NUM_OF_INPUT_TRIGS_UART_EN 3
-#define NUM_OF_SOUNDS_MAX 10
-#define NUM_OF_NOTIF_MAX 10
 #define NUM_OF_CHAR_FILENAME 13 // FAT format [8.3] plus null char at the end
+#define XBEE_ENABLED 1  // 0: Disable XBEE support, 1: Enable XBEE
 
 /*************************************/
 
 /* Globals and constants */
 
 /* Triggers, thesee are all Arduino pin definitions */
-const int IO_TRIG1 = A0;
-const int IO_TRIG2_SDA = A4;  // This pin is shared with I2C SDA, connected to DIO12 (pin4) on XBEE
-const int IO_TRIG3_SCL = A5;  // This pin is shared with I2C SCL, connected to SLEEP_RQ (pin9) on XBEE
-const int IO_TRIG4_RXI = 1;   // This pin is shared with UART TX, connected to DOUT (pin2) on XBEE
-const int IO_TRIG5_TXO = 0;   // This pin is shared with UART RX, connected to DIN (via 100 ohm resistor, pin3) on XBEE
+#define IO_TRIG1 A0
+#define IO_TRIG2_SDA A4  // This pin is shared with I2C SDA, connected to DIO12 (pin4) on XBEE
+#define IO_TRIG3_SCL A5  // This pin is shared with I2C SCL, connected to SLEEP_RQ (pin9) on XBEE
+#define IO_TRIG4_RXI 1   // This pin is shared with UART TX, connected to DOUT (pin2) on XBEE
+#define IO_TRIG5_TXO 0   // This pin is shared with UART RX, connected to DIN (via 100 ohm resistor, pin3) on XBEE
 
 /** Note */
 /*
@@ -96,32 +88,33 @@ const int IO_TRIG5_TXO = 0;   // This pin is shared with UART RX, connected to D
 */
 
 /* Rotary encoder with RGB. This is optional hardware, but installed on BELL hardware */
-const int IO_ROT_LED_R = 10;
-const int IO_ROT_LED_G = A1;
-const int IO_ROT_LED_B = 5;
-const int IO_ROT_A = 3;
-const int IO_ROT_B = A3;
-const int IO_ROT_SW = 4;
+#define IO_ROT_LED_R 10
+#define IO_ROT_LED_G A1
+#define IO_ROT_LED_B 5
+
+#define IO_ROT_A 3
+#define IO_ROT_B A3
+#define IO_ROT_SW 4
 
 /* MP3 chip */
-const int IO_EN_GPIO1 = A2;
-const int IO_RIGHT = A6;
-const int IO_LEFT = A7;
-const int IO_MP3_DREQ = 2;
-const int IO_MP3_CS = 6;
-const int IO_MP3_DCS = 7;
-const int IO_MP3_RST = 8;
+#define IO_EN_GPIO1 A2
+#define IO_RIGHT A6
+#define IO_LEFT A7
+#define IO_MP3_DREQ 2
+#define IO_MP3_CS 6
+#define IO_MP3_DCS 7
+#define IO_MP3_RST 8
 
 /* SD Card */
-const int IO_SD_CS = 9;
+#define IO_SD_CS 9
 
 /* SPI */
-const int IO_SPI_MOSI = 11;
-const int IO_SPI_MISO = 12;
-const int IO_SPI_SCK = 13;
+#define IO_SPI_MOSI 11
+#define IO_SPI_MISO 12
+#define IO_SPI_SCK 13
 
 /* Default volume */
-const uint16_t DEFAULT_VOLUME = 80; // 0: Loudest, 255: lowest
+const uint16_t DEFAULT_VOLUME = 0; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MIN_VOLUME = 255; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_MAX_VOLUME = 0; // 0: Loudest, 255: lowest
 const uint16_t DEFAULT_STEP_VOLUME = 1; // 0: Loudest, 255: lowest
@@ -144,7 +137,13 @@ typedef enum syserrors
   ERR_SD_INIT,
   ERR_MP3_INIT,
   ERR_XBEE_INV_RESPONSE,
-  ERR_XBEE_NO_RESPONSE
+  ERR_XBEE_NO_RESPONSE,
+  ERR_XBEE_NO_LISTENER
+};
+
+typedef enum sysokstat
+{
+  GOOD_XBEE_TX_SUCCESS
 };
 
 typedef enum btnstate
@@ -184,6 +183,9 @@ volatile uint16_t gSoundVolume = 0;
 
 char gCurrTrackName[13] = {};
 uint16_t gMaxNumberOfFiles = 1;
+byte gCurrToggleLed = 0;
+byte gToggleLedArray[3] = {0x6, 0x5, 0x3};
+bool gPlaybackActiveIndicator = false;
 
 /*************************************/
 
@@ -204,11 +206,10 @@ void setup()
   /* Initialize serial port */
   Serial.begin(9600);
 
+#if (XBEE_ENABLED==1)
   /* Initialize XBee */
-  if (2 == DEBUG_ENABLED)
-  {
-    gXbee.setSerial(Serial);
-  }
+  gXbee.setSerial(Serial);
+#endif
 
   /* Print header */
   LOG_FMT("Free RAM: %d", FreeRam());
@@ -221,7 +222,6 @@ void setup()
   pinMode(IO_ROT_LED_R, OUTPUT);
   pinMode(IO_ROT_LED_G, OUTPUT);
   pinMode(IO_ROT_LED_B, OUTPUT);
-  update_rgb_led(0, 0, 0); // Turn off LEDs
 
   /* MP3 Controls */
   pinMode(IO_EN_GPIO1, OUTPUT);
@@ -265,6 +265,9 @@ void setup()
   /* Set volume */
   gSoundVolume = DEFAULT_VOLUME; // TODO: Reload?
   gMp3Chip.setVolume(gSoundVolume); // Left and Right channel same level
+
+  /* Clear LED */
+  update_bit_rgb_led(0x7);
 
   /* Enable amplifier after MP3 system initialized */
   digitalWrite(IO_EN_GPIO1, HIGH);
@@ -328,18 +331,46 @@ void loop()
   /* Stop here and do not proceed if bell is still playing */
   if (false == gMp3Chip.isPlaying())
   {
+    if (true == gPlaybackActiveIndicator)
+    {
+      /* Turn off LED playback indicator */
+      update_bit_rgb_led(0x7);
+      
+      /* Reset playback indicator */
+      gPlaybackActiveIndicator = false;
+    }
+    
     /* Check if need to play next bell songs */
     if (true == s_bell_active)
     {
+      /* Reset toggle LED */
+      gCurrToggleLed = 0;
+
       /* Play Next Song */
       play_next_song();
-  
+
+#if(XBEE_ENABLED==1)
+      /* Send broadcast command through XBEE if enabled */
+      xbee_cmd_bc_tx(0, 0);
+#endif
+
       /* Clear bell active */
       s_bell_active = false;
+
+      /* Enable Playback Indicator */
+      gPlaybackActiveIndicator = true;
     }
   }
   else
   {
+    /* Toggle LED if playback is on */
+    if ( true == gPlaybackActiveIndicator )
+    {
+      byte curr_toggle = gCurrToggleLed % 3;
+      update_bit_rgb_led(gToggleLedArray[curr_toggle]);
+      gCurrToggleLed++;
+    }
+
     /* Automatically clear bell request */
     s_bell_active = false;
   }
@@ -487,12 +518,24 @@ void rotary_btn_isr(void)
 
 void update_rgb_led(byte r, byte g, byte b)
 {
+  byte temp_r = 255 - r;
+  byte temp_g = 255 - g;
+  byte temp_b = 255 - b;
+
   /* Update color */
-  //analogWrite(IO_ROT_LED_R, (r)); // pin 10's PWM is 490 Hz
-  digitalWrite(IO_ROT_LED_R, (0 == r) ? LOW : HIGH); // use as digital pin, so... only on or off.
-  digitalWrite(IO_ROT_LED_G, (0 == g) ? LOW : HIGH); // Unfortunately this pin is not PWM, so... only on or off.
-  digitalWrite(IO_ROT_LED_B, (0 == b) ? LOW : HIGH); // use as digital pin, so... only on or off.
-  //analogWrite(IO_ROT_LED_B, (b)); // pin 5's PWM is 980 Hz
+  analogWrite(IO_ROT_LED_R, (temp_r)); // pin 10's PWM is 490 Hz, 0 : 0% duty cycle, 255: 100% duty cycle
+  digitalWrite(IO_ROT_LED_G, (0 == temp_g) ? LOW : HIGH); // Unfortunately this pin is not PWM, so... only on or off.
+  analogWrite(IO_ROT_LED_B, (temp_b)); // pin 5's PWM is 980 Hz, 0 : 0% duty cycle, 255: 100% duty cycle
+}
+
+void update_bit_rgb_led(byte bitWiseRGB)
+{
+  byte temp_bitwise = bitWiseRGB & 0x7;
+
+  /* Update color */
+  digitalWrite(IO_ROT_LED_R, temp_bitwise & 0x1); // use as digital pin, only on or off.
+  digitalWrite(IO_ROT_LED_G, temp_bitwise & 0x2); // use as digital pin, only on or off.
+  digitalWrite(IO_ROT_LED_B, temp_bitwise & 0x4); // use as digital pin, only on or off.
 }
 
 void change_volume(volchange volopt)
@@ -540,13 +583,13 @@ uint16_t scan_max_num_tracks(void)
 
   /* Go through each file and check for its mp3 extension */
   bool result = true;
-  
+
   while (true == result)
   {
     result = file.openNext(sd.vwd(), O_READ);
 
     //LOG_FMT(">> Res: %d", result);
-    
+
     if (true == result)
     {
       /* Is this file playable? */
@@ -555,12 +598,16 @@ uint16_t scan_max_num_tracks(void)
 
       /* Check against simple rules */
       char *temp_ext;
-    
+
       /* Seek to last . character */
       temp_ext = strrchr(gCurrTrackName, '.');
       temp_ext += 1; // Seek next character
 
-      if ( (0 != temp_ext[0]) && ('_' != temp_ext[0]) && (0 == strcasecmp(temp_ext, "MP3")) )
+      if ( (('T' == gCurrTrackName[0]) || ('t' == gCurrTrackName[0]))
+           && (('R' == gCurrTrackName[1]) || ('r' == gCurrTrackName[1]))
+           && (('A' == gCurrTrackName[2]) || ('a' == gCurrTrackName[2]))
+           && ((0 == strcasecmp(temp_ext, "MP3")) || (0 == strcasecmp(temp_ext, "mp3")) )
+         )
       {
         /* Supported file */
         track_counts++;
@@ -569,7 +616,7 @@ uint16_t scan_max_num_tracks(void)
     else
     {
       /* This is all, no more file in this directory, ensure it is still under root folder */
-      sd.chdir("/",true);
+      sd.chdir("/", true);
     }
 
     file.close();
@@ -579,7 +626,7 @@ uint16_t scan_max_num_tracks(void)
   if (track_counts <= 0) track_counts = 1;
 
   /* Limit check: Too many files detected, only play the first 999 files */
-  if (track_counts >= MAX_NUM_FILES) track_counts = MAX_NUM_FILES-1;
+  if (track_counts >= MAX_NUM_FILES) track_counts = MAX_NUM_FILES - 1;
 
   return track_counts;
 }
@@ -601,11 +648,11 @@ uint32_t play_next_song(void)
   do
   {
     sprintf(temp_trackname, "TRACK%03d.MP3", sPlayIdx);
-    
+
     result = gMp3Chip.playMP3(temp_trackname);
-  
+
     LOG_FMT(">> Playing: %s, status: %d ...", temp_trackname, result);
-  
+
     /* Next track */
     sPlayIdx++;
     if (sPlayIdx > gMaxNumberOfFiles) sPlayIdx = 0;
@@ -621,23 +668,21 @@ uint32_t play_next_song(void)
 void error_blink(syserrors errorCode, colors color, bool singleTrigger)
 {
   int error_blinks = (int)errorCode;
-  byte r = 0;
-  byte g = 0;
-  byte b = 0;
+  byte temp_rgb = 0x7;  // Off
 
   switch (color)
   {
     case GREEN:
-      g = 255;
+      temp_rgb = 0x5;
       break;
 
     case BLUE:
-      b = 255;
+      temp_rgb = 0x3;
       break;
 
     case RED:
     default:
-      r = 255;
+      temp_rgb = 0x6;
       break;
   }
 
@@ -646,9 +691,9 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
   {
     for (int i = 0; i < error_blinks; i++)
     {
-      update_rgb_led(0, 0, 0);
+      update_bit_rgb_led(0x7);  // All off
       delay(100);
-      update_rgb_led(r, g, b);
+      update_bit_rgb_led(temp_rgb);
       delay(200);
     }
     delay(1000);
@@ -658,15 +703,58 @@ void error_blink(syserrors errorCode, colors color, bool singleTrigger)
   }
 }
 
+void good_blink(sysokstat okCode, colors color)
+{
+  int ok_blinks = (int)okCode;
+  byte temp_rgb = 0x7;  // Off
+
+  switch (color)
+  {
+    case GREEN:
+      temp_rgb = 0x5;
+      break;
+
+    case BLUE:
+      temp_rgb = 0x3;
+      break;
+
+    case RED:
+    default:
+      temp_rgb = 0x6;
+      break;
+  }
+
+  /* Blink only once */
+  for (int i = 0; i < ok_blinks; i++)
+  {
+    update_bit_rgb_led(0x7);  // All off
+    delay(100);
+    update_bit_rgb_led(temp_rgb);
+    delay(200);
+  }
+  delay(1000);
+}
 
 /*************************************/
 /* XBEE / Debug Utilities */
 /*************************************/
-void xbee_str_tx(String msg)
+void xbee_str_bc_tx(String msg)
 {
+#if (XBEE_ENABLED==1)
+
   /* Create address (to coordinator) */
   XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
-  ZBTxRequest zb_tx = ZBTxRequest(addr64, 0xfffc, 0x0, 0x0, msg.c_str(), msg.length() + 1, 0x1); // To all routers, expecting response
+  
+  ZBTxRequest zb_tx = ZBTxRequest(
+    addr64,           // Address 64: (default: 0xffff or broadcast)
+    0xfffc,           // Address 16: (default: to all router node)
+    0x0,              // Broadcast radius
+    0x0,              // Options
+    msg.c_str(),      // Data payload
+    msg.length() + 1, // Data payload lenght
+    0x1               // FrameId (0: no response required, 1: response required)
+    ); // To all routers, expecting response
+    
   ZBTxStatusResponse tx_status = ZBTxStatusResponse();
 
   /* Begin transmit */
@@ -684,10 +772,12 @@ void xbee_str_tx(String msg)
       if (tx_status.getDeliveryStatus() == SUCCESS)
       {
         /* GOOD! */
+        good_blink(GOOD_XBEE_TX_SUCCESS, GREEN);
       }
       else
       {
         /* No one received */
+        error_blink(ERR_XBEE_NO_LISTENER, RED, true);
       }
     }
   }
@@ -701,5 +791,74 @@ void xbee_str_tx(String msg)
     /* No response at all ... */
     error_blink(ERR_XBEE_NO_RESPONSE, RED, true);
   }
+
+#endif
+
+}
+
+/* Command Broadcast TX Request */
+void xbee_cmd_bc_tx(byte commandId, byte subCommandId)
+{
+#if (XBEE_ENABLED==1)
+  /* Command Payload */
+  uint8_t temp_payload[2] = {};
+  temp_payload[0] = commandId;
+  temp_payload[1] = subCommandId;
+
+  /* Create address (to coordinator) */
+  XBeeAddress64 addr64 = XBeeAddress64(0x0, 0xffff); // 0x000000000000ffff is broadcast
+  
+  ZBTxRequest zb_tx = ZBTxRequest(
+    addr64,           // Address 64: (default: 0xffff or broadcast)
+    0xfffc,           // Address 16: (default: to all router node)
+    0x0,              // Broadcast radius
+    0x0,              // Options
+    temp_payload,      // Data payload
+    sizeof(temp_payload), // Data payload lenght
+    0x1               // FrameId (0: no response required, 1: response required)
+    ); // To all routers, expecting response
+    
+  ZBTxStatusResponse tx_status = ZBTxStatusResponse();
+
+  /* Begin transmit */
+  gXbee.send(zb_tx);
+
+  /* Wait for status response, 500ms */
+  if (gXbee.readPacket(500))
+  {
+    /* Should be TX Status */
+    if (gXbee.getResponse().getApiId() == ZB_TX_STATUS_RESPONSE)
+    {
+      gXbee.getResponse().getZBTxStatusResponse(tx_status);
+
+      /* Get delivery status, 5th byte */
+      if (tx_status.getDeliveryStatus() == SUCCESS)
+      {
+        /* GOOD! */
+        good_blink(GOOD_XBEE_TX_SUCCESS, GREEN);
+        LOG_DBG(F(">> XBEE TX OK!"));
+      }
+      else
+      {
+        /* No one received */
+        error_blink(ERR_XBEE_NO_LISTENER, RED, true);
+        LOG_ERR(F(">> XBEE NO RX!"));
+      }
+    }
+  }
+  else if (gXbee.getResponse().isError())
+  {
+    /* Received improper response */
+    error_blink(ERR_XBEE_INV_RESPONSE, RED, true);
+    LOG_ERR(F(">> XBEE Response Error!"));
+  }
+  else
+  {
+    /* No response at all ... */
+    error_blink(ERR_XBEE_NO_RESPONSE, RED, true);
+    LOG_ERR(F(">> XBEE No Response!"));
+  }
+
+#endif
 
 }
